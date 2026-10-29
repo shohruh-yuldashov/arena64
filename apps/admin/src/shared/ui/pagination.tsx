@@ -1,4 +1,5 @@
 import { useTranslation } from "@/shared/i18n";
+import { ErrorNotice } from "@/shared/ui/error-notice";
 
 /**
  * The admin console's page control — A64-024 hardening.
@@ -25,12 +26,21 @@ import { useTranslation } from "@/shared/i18n";
  * walk rather than hidden: a control that disappears moves everything
  * around it, and an operator who was about to click lands on whatever slid
  * into its place.
+ *
+ * ## A page that failed to load — A64-031.G
+ *
+ * `failed` renders an alert beside the control: the rows above are still
+ * the previous page, and without the sentence a failed "Next" was a button
+ * that re-enabled and did nothing. It renders even when there is nothing
+ * to navigate, because a reload after a mutation can fail on a one-page
+ * listing too.
  */
 export function Pagination({
   page,
   hasPrevious,
   hasNext,
   busy,
+  failed,
   onPrevious,
   onNext,
 }: {
@@ -38,28 +48,33 @@ export function Pagination({
   hasPrevious: boolean;
   hasNext: boolean;
   busy: boolean;
+  failed: boolean;
   onPrevious: () => void;
   onNext: () => void;
 }) {
   const { t } = useTranslation();
+  const notice = failed ? <ErrorNotice message={t("pagination.failed")} /> : null;
 
   // Nothing to navigate: one page, no next. Rendering a disabled pair here
   // would be two controls that can never do anything.
-  if (!hasPrevious && !hasNext) return null;
+  if (!hasPrevious && !hasNext) return notice;
 
   return (
-    <nav className="pagination" aria-label={t("pagination.label")}>
-      <button type="button" onClick={onPrevious} disabled={!hasPrevious || busy}>
-        {t("pagination.previous")}
-      </button>
+    <>
+      {notice}
+      <nav className="pagination" aria-label={t("pagination.label")}>
+        <button type="button" onClick={onPrevious} disabled={!hasPrevious || busy}>
+          {t("pagination.previous")}
+        </button>
 
-      <span aria-live="polite">
-        {busy ? t("pagination.loading") : t("pagination.page", { page })}
-      </span>
+        <span aria-live="polite">
+          {busy ? t("pagination.loading") : t("pagination.page", { page })}
+        </span>
 
-      <button type="button" onClick={onNext} disabled={!hasNext || busy}>
-        {t("pagination.next")}
-      </button>
-    </nav>
+        <button type="button" onClick={onNext} disabled={!hasNext || busy}>
+          {t("pagination.next")}
+        </button>
+      </nav>
+    </>
   );
 }

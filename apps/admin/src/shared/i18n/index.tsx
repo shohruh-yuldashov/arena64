@@ -1,4 +1,12 @@
-import { createContext, type ReactNode, use, useCallback, useMemo, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  use,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 import en from "@/shared/i18n/locales/en.json";
 import ru from "@/shared/i18n/locales/ru.json";
@@ -79,9 +87,18 @@ function interpolate(template: string, values?: Record<string, string | number>)
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(readStoredLocale);
 
+  // The document says which language it is in, whichever way the locale
+  // was chosen — A64-031.G. Set only inside `setLocale`, it was never set at
+  // all: nothing calls it, so a console rendered in Uzbek or Russian from a
+  // stored or browser preference announced itself as `index.html`'s "en",
+  // and a screen reader read Cyrillic with English pronunciation (WCAG
+  // 3.1.1).
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
+
   const setLocale = useCallback((next: Locale) => {
     setLocaleState(next);
-    document.documentElement.lang = next;
     try {
       localStorage.setItem(STORAGE_KEY, next);
     } catch {

@@ -64,6 +64,8 @@ export function BroadcastComposer({ onSent }: { onSent: (broadcast: BroadcastVie
   const { notify } = useToast();
   const titleId = useId();
   const bodyId = useId();
+  const recipientsHintId = useId();
+  const recipientsStatusId = useId();
 
   const [audience, setAudience] = useState<BroadcastAudience>("all_players");
   const [recipientsText, setRecipientsText] = useState("");
@@ -241,22 +243,31 @@ export function BroadcastComposer({ onSent }: { onSent: (broadcast: BroadcastVie
             ) : (
               <div className="field">
                 <label htmlFor="recipients">{t("broadcast.recipients")}</label>
-                <span className="field__hint">{t("broadcast.recipientsHint")}</span>
+                <span id={recipientsHintId} className="field__hint">
+                  {t("broadcast.recipientsHint")}
+                </span>
+                {/* Both lines are the field's description — A64-031.G.
+                    `aria-invalid` alone announced that the list was wrong
+                    and never why, and the count is how a screen-reader user
+                    learns the paste was read. */}
                 <textarea
                   id="recipients"
                   value={recipientsText}
                   aria-invalid={recipientProblem}
+                  aria-describedby={`${recipientsHintId} ${recipientsStatusId}`}
                   onChange={(event) => {
                     setRecipientsText(event.target.value);
                   }}
                 />
                 {recipientProblem ? (
-                  <span className="field__error">
+                  <span id={recipientsStatusId} className="field__error">
                     <Icon name="warning" size={15} />
                     {t("broadcast.recipientsInvalid")}
                   </span>
                 ) : (
-                  <span className="field__hint">{audienceLabel}</span>
+                  <span id={recipientsStatusId} className="field__hint">
+                    {audienceLabel}
+                  </span>
                 )}
               </div>
             )}

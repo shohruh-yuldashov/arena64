@@ -9,10 +9,11 @@ import {
 import { TournamentActions } from "@/features/tournaments/tournament-actions";
 import { useVocab } from "@/features/vocabulary";
 import { useTranslation } from "@/shared/i18n";
+import { DataTable } from "@/shared/ui/data-table";
 import { Icon } from "@/shared/ui/icon";
 import { PageHeader } from "@/shared/ui/page-header";
+import { ErrorState, LoadingSkeleton } from "@/shared/ui/states";
 import { StatusBadge, type Tone } from "@/shared/ui/status-badge";
-import { ErrorNotice } from "@/shared/ui/error-notice";
 
 /**
  * One tournament — A64-024.5 §17, §18.
@@ -40,6 +41,14 @@ import { ErrorNotice } from "@/shared/ui/error-notice";
  *
  * Sections render only when the data exists — §17 forbids fake "coming
  * soon" panels inside a real detail page.
+ *
+ * ## Every section renders at every width — A64-031.G
+ *
+ * The entrants and the bracket are lists with no table beside them, and the
+ * rounds and the standings are tables with no list beside them. Each used
+ * the half of a responsive *pair* that hides itself at one breakpoint, so a
+ * desktop showed two headings over nothing and a phone two more. They now
+ * use `.card-list` and `DataTable`, which have no twin to defer to.
  */
 
 /** Where a node's winner goes. `null` for the final, which has no parent. */
@@ -106,8 +115,16 @@ export function TournamentDetailPage() {
         <Link to="/tournaments">{t("tournaments.back")}</Link>
       </p>
 
-      {state === "loading" && <p role="status">{t("tournaments.loading")}</p>}
-      {state === "error" && <ErrorNotice message={t("tournaments.error")} />}
+      {state === "loading" && <LoadingSkeleton rows={4} label={t("tournaments.loading")} />}
+      {state === "error" && (
+        <ErrorState
+          title={t("tournaments.error")}
+          onRetry={() => {
+            setState("loading");
+            void load();
+          }}
+        />
+      )}
 
       {state === "ready" && detail !== null && (
         <>
@@ -151,12 +168,14 @@ export function TournamentDetailPage() {
                 detail is **re-read** rather than patched locally, so the
                 next set of actions comes from the same authority as the
                 first. */}
-            <TournamentActions
-              tournamentId={detail.tournament.tournament_id}
-              name={detail.tournament.name}
-              status={detail.tournament.status}
-              onChanged={() => void load()}
-            />
+            <div className="panel__body">
+              <TournamentActions
+                tournamentId={detail.tournament.tournament_id}
+                name={detail.tournament.name}
+                status={detail.tournament.status}
+                onChanged={() => void load()}
+              />
+            </div>
           </section>
 
           <section>
@@ -196,7 +215,7 @@ export function TournamentDetailPage() {
             {detail.entrants.length === 0 ? (
               <p className="muted">{t("tournaments.noEntrants")}</p>
             ) : (
-              <ul className="users-cards">
+              <ul className="card-list">
                 {detail.entrants.map((entrant) => (
                   <li key={entrant.player_id}>
                     <Link to="/users/$userId" params={{ userId: entrant.player_id }}>
@@ -219,7 +238,7 @@ export function TournamentDetailPage() {
             {detail.rounds.length === 0 ? (
               <p className="muted">{t("tournaments.noRounds")}</p>
             ) : (
-              <table className="users-table">
+              <DataTable caption={t("tournaments.rounds")}>
                 <thead>
                   <tr>
                     <th scope="col">{t("tournaments.round")}</th>
@@ -232,13 +251,13 @@ export function TournamentDetailPage() {
                   {detail.rounds.map((round) => (
                     <tr key={round.round_number}>
                       <td>{round.round_number}</td>
-                      <td>{round.status}</td>
+                      <td>{vocab("roundStatus", round.status)}</td>
                       <td>{round.pairing_count}</td>
                       <td>{moment(round.published_at)}</td>
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </DataTable>
             )}
           </section>
 
@@ -252,7 +271,7 @@ export function TournamentDetailPage() {
                     <h4>
                       {t("tournaments.round")} {roundNumber}
                     </h4>
-                    <ul className="users-cards">
+                    <ul className="card-list">
                       {detail.pairings
                         .filter((pairing) => pairing.round_number === roundNumber)
                         .sort((a, b) => a.slot - b.slot)
@@ -280,7 +299,8 @@ export function TournamentDetailPage() {
                               </span>
                               {pairing.advancement_reason !== null && (
                                 <span className="muted">
-                                  {t("tournaments.advancement")}: {pairing.advancement_reason}
+                                  {t("tournaments.advancement")}:{" "}
+                                  {vocab("advancementReason", pairing.advancement_reason)}
                                 </span>
                               )}
                               {pairing.match_ids.map((matchId) => (
@@ -302,11 +322,11 @@ export function TournamentDetailPage() {
             {detail.standings.length === 0 ? (
               <p className="muted">{t("tournaments.noStandings")}</p>
             ) : (
-              <table className="users-table">
+              <DataTable caption={t("tournaments.standings")}>
                 <thead>
                   <tr>
                     <th scope="col">{t("tournaments.rank")}</th>
-                    <th scope="col">{t("tournaments.colName")}</th>
+                    <th scope="col">{t("tournaments.colPlayer")}</th>
                     <th scope="col">{t("tournaments.record")}</th>
                     <th scope="col">{t("tournaments.finalStatus")}</th>
                   </tr>
@@ -323,11 +343,11 @@ export function TournamentDetailPage() {
                       <td>
                         {standing.wins}/{standing.losses}/{standing.draws}
                       </td>
-                      <td>{standing.final_status}</td>
+                      <td>{vocab("finalStatus", standing.final_status)}</td>
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </DataTable>
             )}
           </section>
         </>

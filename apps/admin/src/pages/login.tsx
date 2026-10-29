@@ -61,10 +61,23 @@ export function LoginPage() {
     if (busy) return;
 
     const form = new FormData(event.currentTarget);
+    const email = String(form.get("email") ?? "");
+    const password = String(form.get("password") ?? "");
+
+    // The form is `noValidate`, so an empty field reached the server, whose
+    // `422` the client reads as "unavailable" — and an operator who had
+    // only pressed Enter too early was told the server could not be
+    // reached. Said here instead, before any request — A64-031.G.
+    if (email.trim() === "" || password === "") {
+      setFailure("login.missing");
+      emailField.current?.focus();
+      return;
+    }
+
     setBusy(true);
     setFailure(null);
 
-    const outcome = await signIn(String(form.get("email")), String(form.get("password")));
+    const outcome = await signIn(email, password);
     setBusy(false);
 
     if (outcome.status !== "ok") {

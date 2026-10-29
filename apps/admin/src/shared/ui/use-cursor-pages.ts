@@ -37,6 +37,15 @@ import type { Outcome } from "@/shared/api/client";
  * the walk restarts at page 1 — a cursor from one filter names a row that
  * may not be in the other's result at all, and continuing with it would
  * silently show a page from the wrong query.
+ *
+ * ## A failed page says so — A64-031.G
+ *
+ * A navigation that fails keeps the rows on screen, and before this the
+ * operator learned nothing else: the button re-enabled, the page number
+ * stayed put, and a click that did nothing looked like a click that had not
+ * landed. `failed` is that missing sentence, and it is cleared by the next
+ * attempt rather than by a timer, so it is on screen exactly as long as it
+ * is true.
  */
 export interface CursorPage<T> {
   items: T[];
@@ -51,9 +60,14 @@ export interface CursorPages<T> {
   state: "loading" | "ready" | "error";
   /** True while a *navigation* is in flight, so the control can disable. */
   busy: boolean;
+  /** The last navigation failed, and the rows shown are the page before it. */
+  failed: boolean;
   next: () => void;
   previous: () => void;
-  /** Re-fetch the page currently shown — after a mutation, say. */
+  /**
+   * Re-fetch the page currently shown — after a mutation, or as the retry
+   * of a failed first load, which then shows its loading state again.
+   */
   reload: () => void;
 }
 
@@ -77,6 +91,7 @@ export function useCursorPages<T>(
   const [rows, setRows] = useState<T[]>([]);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   /**
    * The cursor that produced each page, page 1 first.
@@ -98,6 +113,7 @@ export function useCursorPages<T>(
     const next = new AbortController();
     controller.current = next;
 
+    setFailed(false);
     if (navigating) setBusy(true);
     else setState("loading");
 
@@ -109,8 +125,9 @@ export function useCursorPages<T>(
         // A failed navigation leaves the page where it was rather than
         // emptying it: the rows on screen were true when they were
         // fetched, and replacing them with nothing would read as "this
-        // page is empty".
-        if (!navigating) setState("error");
+        // page is empty". It is reported instead.
+        if (navigating) setFailed(true);
+        else setState("error");
         return;
       }
 
@@ -143,6 +160,7 @@ export function useCursorPages<T>(
     hasNext: nextCursor !== null,
     state,
     busy,
+    failed,
     next: () => {
       if (nextCursor === null || busy) return;
       void load(index + 1, { navigating: true });
@@ -151,6 +169,10 @@ export function useCursorPages<T>(
       if (index === 0 || busy) return;
       void load(index - 1, { navigating: true });
     },
-    reload: () => void load(index, { navigating: true }),
+    // Over rows, a reload keeps them and reports through `failed`. Over a
+    // failed first load there are no rows to keep, so it is a load again —
+    // otherwise "Try again" against a server that is still down changes
+    // nothing on screen and reads as a button that does not work.
+    reload: () => void load(index, { navigating: state === "ready" }),
   };
 }

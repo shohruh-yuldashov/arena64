@@ -124,7 +124,7 @@ export function ModerationPage() {
 
       {pages.state === "ready" && pages.rows.length > 0 && (
         <>
-          <DataTable caption={t("moderation.title")} minWidth="46rem">
+          <DataTable caption={t("moderation.title")} minWidth="46rem" narrow="cards">
             <thead>
               <tr>
                 <th scope="col">{t("moderation.colAccount")}</th>
@@ -176,6 +176,7 @@ export function ModerationPage() {
             hasPrevious={pages.hasPrevious}
             hasNext={pages.hasNext}
             busy={pages.busy}
+            failed={pages.failed}
             onPrevious={pages.previous}
             onNext={pages.next}
           />

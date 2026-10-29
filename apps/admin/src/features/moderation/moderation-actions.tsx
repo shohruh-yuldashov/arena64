@@ -178,6 +178,7 @@ export function ModerationActions({
         title={t("moderation.restoreTitle")}
         description={t("moderation.restoreBody", { name: displayName })}
         confirmLabel={t("moderation.restore")}
+        tone="primary"
         busy={busy}
         error={error}
         onCancel={close}

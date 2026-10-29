@@ -159,7 +159,7 @@ export function UsersPage() {
         <>
           {/* Wide: a table with real headers, so a screen reader can
               announce the column a cell belongs to. */}
-          <DataTable caption={t("users.title")} minWidth="52rem">
+          <DataTable caption={t("users.title")} minWidth="52rem" narrow="cards">
             <thead>
               <tr>
                 <th scope="col">{t("users.colUser")}</th>
@@ -251,6 +251,7 @@ export function UsersPage() {
             hasPrevious={pages.hasPrevious}
             hasNext={pages.hasNext}
             busy={pages.busy}
+            failed={pages.failed}
             onPrevious={pages.previous}
             onNext={pages.next}
           />

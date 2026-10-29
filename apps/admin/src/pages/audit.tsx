@@ -247,7 +247,7 @@ export function AuditPage() {
 
       {pages.state === "ready" && pages.rows.length > 0 && (
         <>
-          <DataTable caption={t("audit.title")} minWidth="54rem">
+          <DataTable caption={t("audit.title")} minWidth="54rem" narrow="cards">
             <thead>
               <tr>
                 <th scope="col">{t("audit.colWhen")}</th>
@@ -300,6 +300,7 @@ export function AuditPage() {
             hasPrevious={pages.hasPrevious}
             hasNext={pages.hasNext}
             busy={pages.busy}
+            failed={pages.failed}
             onPrevious={pages.previous}
             onNext={pages.next}
           />

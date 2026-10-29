@@ -5,6 +5,7 @@ import type { MatchHistoryEntry } from "@/features/match-history/api";
 import { type TranslationKey, useTranslation } from "@/shared/i18n";
 import { cn } from "@/shared/lib/cn";
 import {
+  formatDate,
   formatDateTime,
   formatNumber,
   formatRatingChange,
@@ -207,7 +208,11 @@ export function MatchRow({ entry, playerId }: { entry: MatchHistoryEntry; player
           title={formatDateTime(played, locale) ?? ""}
           className="text-muted-foreground shrink-0 text-xs"
         >
-          {formatRelativeTime(played, locale, t)}
+          {/* A64-032. `formatRelativeTime` answers only inside a week and
+              `null` beyond it, by design — every match older than seven days
+              rendered with no date at all. The calendar date takes over
+              there, as it does in the session list. */}
+          {formatRelativeTime(played, locale, t) ?? formatDate(played, locale)}
         </time>
       </div>
     </li>

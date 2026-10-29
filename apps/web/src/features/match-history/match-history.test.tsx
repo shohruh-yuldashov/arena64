@@ -157,6 +157,23 @@ it("links each row to the real replay route and names it unambiguously", async (
   expect(within(first).getByText(/resignation/i)).toBeInTheDocument();
 });
 
+it("dates a match older than a week instead of leaving the row undated", async () => {
+  // A64-032. Every fixture here ended in August, and every row rendered
+  // with an empty `<time>`: the relative formatter answers only inside a
+  // week, and nothing took over past it. The instant is the server's, so
+  // the assertion is that *some* date is written, not which words.
+  servePages();
+  renderApp({ path: "/games/history" });
+
+  const list = await screen.findByRole("list", { name: /match history/i }, { timeout: 5000 });
+  const first = within(list).getAllByRole("listitem")[0] as HTMLElement;
+  const time = first.querySelector("time");
+
+  expect(time).not.toBeNull();
+  expect(time?.textContent?.trim()).not.toBe("");
+  expect(time?.textContent).toMatch(/2026/);
+});
+
 it("tells a player with no matches what to do about it", async () => {
   // §21: helpful, not "No data". The link is the point — a player with an
   // empty history is a player who has not played, and the useful thing to

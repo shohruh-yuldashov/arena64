@@ -2,7 +2,7 @@
 
 > **Status:** Placeholder for the backend contract — the **client** is specified in [`frontend.md`](./frontend.md) §13 (A64-020.3)
 > **Owner:** _Unassigned_
-> **Last updated:** 2026-10-23 — A64-031.F, country picker
+> **Last updated:** 2026-10-29 — A64-032, recent games and rating progress
 > **Related:** [`frontend.md`](./frontend.md) §13, `templates/feature-spec.md`
 
 ## Description
@@ -35,3 +35,4 @@ file:
 | The client **never predicts** privacy filtering — an omitted field is rendered as absent, never as `false` | §13.4 |
 | A device list is **deferred**: `SessionService.list_user_sessions` has no HTTP endpoint, so `/settings/sessions` offers only "sign out everywhere" | §13.8, OQ-8 |
 | Country is **chosen from the backend's own list**, named by `Intl`, and never inferred from the interface language (A64-031.F) | §13.11 |
+| A profile lists the player's **recent games from their seat**, and **your own** profile adds the rating line; neither recomputes a statistic (A64-032) | §13.12 |

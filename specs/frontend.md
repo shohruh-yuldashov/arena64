@@ -6,7 +6,7 @@
 | **Status** | Approved through A64-021.4 — foundation, authentication, profile, social, game, tournaments, PWA, notifications and their event coverage |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-10-23 — A64-031.F, the country picker (§13.11) |
+| **Last updated** | 2026-10-29 — A64-032, recent games and rating progress (§13.12) |
 | **Related ADRs** | [`ADR-002`](../docs/07-decisions/ADR-002-frontend-spa.md) |
 | **Related specs** | [`rating.md`](./rating.md), [`leaderboard.md`](./leaderboard.md), [`tournament.md`](./tournament.md), [`product-experience.md`](./product-experience.md) — the UX/design counterpart to this document |
 | **Related** | `docs/01-architecture/architecture.md` §5, `docs/04-frontend/` |
@@ -736,6 +736,30 @@ alpha-2 code or `null`, and no backend change was made.
 **Country is not language.** Nothing infers a country from the interface locale, the
 browser, or the network, and choosing a country never changes the interface language. The
 locale decides only how a chosen country is named.
+
+### 13.12 Recent games and rating progress — A64-032
+
+What a profile already had: identity, country (§13.11), the record (games, win rate, best
+streak, W/L/D), ratings per speed class and tournaments. What A64-032 adds is the games the
+record is made of and the path the rating took.
+
+| Concern | Rule |
+| --- | --- |
+| Recent games | Both profiles, signed-in readers only (the endpoint takes `CurrentUser`). The last five finished matches from `GET /players/{id}/matches?limit=5`, rendered with the history page's `MatchRow` and linked to the existing replay |
+| Whose seat | The **profile owner's**. "Won" is theirs and the opponent is theirs, whoever reads it. The API names the opponent from the owner's seat since A64-032 (`specs/replay.md` §3) |
+| What is listed | The server's decision: rated matches are public, casual ones reach only a participant. The client never filters, and never explains a gap |
+| Rating change on a row | Only when the server sends it — your own history, once the rating consumer has applied the match. Absent otherwise, never `0` |
+| Older than a week | The calendar date; the relative formatter answers only inside a week |
+| Rating progress | **Own profile only**, from `GET /ratings/me/history`. One speed class at a time, opening on the class with the most games. The line starts at the first listed game's rating *before* it and steps through each stored rating *after* it: nothing interpolated, smoothed or reconstructed |
+| The axis | Spaced by game, not date, so a quiet month neither stretches nor compresses the line. Dates are in the readout and the table |
+| Read without the picture | A readout above the line follows the pointer and the arrow keys; every point is also a table behind a disclosure |
+| Colour | The speed class's own `--speed-*` token (§18.7). No new hue |
+| Win rate | `wins / games played` — draws are in the denominator. The server's definition (`specs/statistics.md` §1), stated under the record |
+| "Highest rating" | **Not shown.** `statistics.highest_rating` is never written (`specs/statistics.md` §8); printing it told every player their peak was 1500 |
+
+**Not here:** another player's rating line (the server serves the change only to its owner), a
+page for another player's whole record, per-colour or head-to-head splits, and the real peak —
+all deferred rather than approximated.
 
 ## 14. Social — A64-020.4
 

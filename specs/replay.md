@@ -55,6 +55,14 @@ replay checks the match before returning a single ply. A casual match requested 
 refused with the same answer an unknown match gets, so match ids stay unenumerable — the rule
 `MatchRosterReader` and the spectator policy already keep.
 
+**Whose opponent — A64-032.** A history row names the opponent from the seat of the player whose
+history it is, not the viewer's. For a player reading their own history these are the same; on
+anybody else's, the viewer-relative answer was "nobody" on every row, which left a profile's
+recent games without opponents. Nothing new is disclosed: both seat ids were already on the row,
+names come from the same privacy-gated profile read, and visibility is decided before this runs.
+The **rating change** is unaffected and is still served only to a player reading their own
+history.
+
 ## 4. Engine versions — replay refuses, history does not
 
 `SUPPORTED_ENGINE_VERSIONS` holds version 2 only. AD-15 records the version every match was

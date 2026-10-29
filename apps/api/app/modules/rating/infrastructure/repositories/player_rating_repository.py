@@ -45,6 +45,7 @@ from app.modules.rating.domain.keys import RatingKey, SpeedClass
 from app.modules.rating.domain.player_rating import PlayerRating, RatingAdjustment
 from app.modules.rating.infrastructure.models import PlayerRatingModel, RatingAdjustmentModel
 from app.modules.rating.public.adjustments import RatingChange
+from app.modules.rating.public.history import RatingHistory, RatingHistoryPoint
 from app.modules.rating.public.ratings import RatingSnapshot
 
 #: The constraint whose violation means "already applied" — PR-1.
@@ -339,3 +340,63 @@ class SqlAlchemyMatchRatingAdjustmentReader:
             row.match_id: RatingChange.of(before=row.rating_before, after=row.rating_after)
             for row in rows.all()
         }
+
+
+class SqlAlchemyRatingHistoryReader:
+    """`rating.public.RatingHistoryReader` over one session — A64-032.
+
+    Its own class for the reason the adjustment reader is: each published
+    question gets a holder that can ask only that question. Read-only, over
+    an append-only table.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def history_for(
+        self, player_id: uuid.UUID, *, key: RatingKey, limit: int
+    ) -> RatingHistory:
+        """One query, served by `ix_rating_adjustment__player_history`.
+
+        The index is `(player_id, variant, speed_class, applied_at DESC)`,
+        so the filter is its prefix and the order is its own: the read stops
+        after `limit + 1` index entries however long the player's record is.
+        The extra row is how `has_earlier` is known without a `COUNT`.
+
+        `match_id` breaks a tie between two adjustments applied in the same
+        instant, so the order — and which point a cap drops — is the same on
+        every read.
+        """
+        rows = (
+            await self._session.execute(
+                select(
+                    RatingAdjustmentModel.match_id,
+                    RatingAdjustmentModel.applied_at,
+                    RatingAdjustmentModel.rating_before,
+                    RatingAdjustmentModel.rating_after,
+                )
+                .where(
+                    RatingAdjustmentModel.player_id == player_id,
+                    RatingAdjustmentModel.variant == key.variant,
+                    RatingAdjustmentModel.speed_class == key.speed_class,
+                )
+                .order_by(
+                    RatingAdjustmentModel.applied_at.desc(),
+                    RatingAdjustmentModel.match_id.desc(),
+                )
+                .limit(limit + 1)
+            )
+        ).all()
+
+        kept = rows[:limit]
+        return RatingHistory(
+            points=[
+                RatingHistoryPoint(
+                    match_id=row.match_id,
+                    applied_at=row.applied_at,
+                    change=RatingChange.of(before=row.rating_before, after=row.rating_after),
+                )
+                for row in reversed(kept)
+            ],
+            has_earlier=len(rows) > limit,
+        )

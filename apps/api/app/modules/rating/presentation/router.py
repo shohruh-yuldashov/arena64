@@ -7,6 +7,7 @@ adjustment in response to `game.match_completed` and nowhere else, and there
 is deliberately no endpoint on this surface that could request one.
 
     GET /ratings/me                        the caller's own standings
+    GET /ratings/me/history                 the caller's own rating over time
     GET /players/{id}/ratings               anybody's, publicly
     GET /leaderboard                        one key's ladder, keyset-paged
     GET /leaderboard/around/{player_id}     where one player stands
@@ -51,8 +52,10 @@ from app.modules.rating.infrastructure.repositories.leaderboard_repository impor
 )
 from app.modules.rating.presentation.dependencies import (
     LeaderboardReaderDep,
+    RatingHistoryReaderDep,
     RatingReaderDep,
 )
+from app.modules.rating.presentation.schemas.history import RatingHistoryResponse
 from app.modules.rating.presentation.schemas.leaderboard import (
     LeaderboardNeighbourhoodResponse,
     LeaderboardResponse,
@@ -98,6 +101,48 @@ async def my_ratings(
     keys = every_key(variant.value)
     snapshots = await ratings.ratings_across([user.id], keys=keys)
     return build_response(PlayerRatingsResponse.of(user.id, dict(snapshots), keys=keys))
+
+
+#: A chart of the last fifty rated games reads as a line; two hundred is a
+#: season of daily play and still one indexed range read.
+_DEFAULT_HISTORY_POINTS = 50
+_MAX_HISTORY_POINTS = 200
+
+
+@ratings_router.get(
+    "/ratings/me/history",
+    response_model=ApiResponse[RatingHistoryResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Your own rating over time",
+)
+async def my_rating_history(
+    user: CurrentUser,
+    history: RatingHistoryReaderDep,
+    variant: Annotated[ProductVariant, Query(description="Which rule set.")] = (
+        ProductVariant.RUSSIAN_8X8
+    ),
+    speed_class: Annotated[SpeedClass, Query(description="Which speed class.")] = (
+        DEFAULT_SPEED_CLASS
+    ),
+    limit: Annotated[
+        int, Query(ge=1, le=_MAX_HISTORY_POINTS, description="Most recent points to return.")
+    ] = _DEFAULT_HISTORY_POINTS,
+) -> ApiResponse[RatingHistoryResponse]:
+    """The caller's rated matches in one key, oldest first — A64-032.
+
+    **Yours only, and only through the token.** There is no `player_id`
+    anywhere on this route. A rating's current value is public; what each
+    match did to it is served elsewhere only to the player it happened to
+    (`GET /players/{id}/matches` gives the change on your own history and
+    `null` on anybody else's), and this route keeps that boundary rather
+    than widening it.
+
+    Every point is a stored adjustment — nothing is interpolated, smoothed
+    or reconstructed. A key never played is an empty list, not a `404`.
+    """
+    key = RatingKey(variant=variant, speed_class=speed_class)
+    found = await history.history_for(user.id, key=key, limit=limit)
+    return build_response(RatingHistoryResponse.of(key, found))
 
 
 @ratings_router.get(

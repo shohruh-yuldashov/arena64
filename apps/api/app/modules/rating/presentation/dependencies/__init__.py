@@ -26,9 +26,15 @@ from app.modules.rating.infrastructure.repositories.leaderboard_repository impor
 )
 from app.modules.rating.infrastructure.repositories.player_rating_repository import (
     SqlAlchemyPlayerRatingRepository,
+    SqlAlchemyRatingHistoryReader,
     SqlAlchemyRatingReader,
 )
-from app.modules.rating.public import LeaderboardReader, RatingReader, RatingSnapshot
+from app.modules.rating.public import (
+    LeaderboardReader,
+    RatingHistoryReader,
+    RatingReader,
+    RatingSnapshot,
+)
 
 
 def get_player_rating_repository(session: DbSessionDep) -> PlayerRatingRepository:
@@ -60,6 +66,14 @@ def get_rating_reader(session: DbSessionDep) -> RatingReader:
 
 
 RatingReaderDep = Annotated[RatingReader, Depends(get_rating_reader)]
+
+
+def get_rating_history_reader(session: DbSessionDep) -> RatingHistoryReader:
+    """A player's adjustments over time — A64-032. Typed as the port: read-only."""
+    return SqlAlchemyRatingHistoryReader(session)
+
+
+RatingHistoryReaderDep = Annotated[RatingHistoryReader, Depends(get_rating_history_reader)]
 PlayerRatingRepositoryDep = Annotated[PlayerRatingRepository, Depends(get_player_rating_repository)]
 
 

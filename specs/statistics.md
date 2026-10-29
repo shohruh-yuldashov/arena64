@@ -164,7 +164,7 @@ reported 74 already processed and applied none.
 
 | Limitation | Why |
 | --- | --- |
-| `current_rating` and `highest_rating` stay at their defaults | They are `rating`'s facts and need a rating projection — §6. Since A64-032 the API documents both as not computed and the web profile displays neither; the true per-class peak is `rating.player_rating.peak_value`, not yet published |
+| `current_rating` and `highest_rating` stay at their defaults | They are `rating`'s facts and need a rating projection — §6. Since A64-032 the API documents both as not computed and the web profile displays neither; the true per-class peak is `rating.player_rating.peak_value`, published as `peak` since A64-033 and shown on each rating card |
 | No per-variant or per-speed-class breakdown | `database.md` §9.5 specifies one keyed `(player_id, rating_category_id)`; this is the flat record a profile renders |
 | No head-to-head, no colour split, no termination breakdown | Same reason. Additive when a surface needs them |
 | A rebuild cannot *correct* an existing row | There is no rebuild mode, deliberately: correcting means deciding what "wrong" is, and nothing has claimed a row is |

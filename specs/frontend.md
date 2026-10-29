@@ -6,7 +6,7 @@
 | **Status** | Approved through A64-021.4 — foundation, authentication, profile, social, game, tournaments, PWA, notifications and their event coverage |
 | **Owner** | _Unassigned_ |
 | **Created** | 2026-08-05 |
-| **Last updated** | 2026-10-29 — A64-032, recent games and rating progress (§13.12) |
+| **Last updated** | 2026-10-29 — A64-033, the leaderboard (§13.13) |
 | **Related ADRs** | [`ADR-002`](../docs/07-decisions/ADR-002-frontend-spa.md) |
 | **Related specs** | [`rating.md`](./rating.md), [`leaderboard.md`](./leaderboard.md), [`tournament.md`](./tournament.md), [`product-experience.md`](./product-experience.md) — the UX/design counterpart to this document |
 | **Related** | `docs/01-architecture/architecture.md` §5, `docs/04-frontend/` |
@@ -760,6 +760,23 @@ record is made of and the path the rating took.
 **Not here:** another player's rating line (the server serves the change only to its owner), a
 page for another player's whole record, per-colour or head-to-head splits, and the real peak —
 all deferred rather than approximated.
+
+### 13.13 The leaderboard — A64-033
+
+`/leaderboard`, a header section, over `GET /leaderboard/players[/me]`. Who is ranked and why is
+the server's — [`leaderboard.md`](./leaderboard.md) §9 — and the page numbers nothing itself.
+
+| Concern | Rule |
+| --- | --- |
+| Visibility | **Protected**, following the backend (both reads take `CurrentUser`), as `/tournaments` follows its own |
+| Speed classes | One tab per class a player can be rated in: bullet, blitz, rapid, classical. No correspondence tab — a ladder empty by construction |
+| Default class | With no `?speed=`, the class the viewer plays most. The page **waits** for their ratings rather than loading a default ladder and swapping it |
+| Country | A native select from `entities/country` (flag and localized name), "All countries" first. It selects a ladder: no profile write, no locale change |
+| URL | `?speed=` and `?country=`, validated in the route **and again at use**: the root route passes the raw query through and a child's output is merged over it, so a dropped value is otherwise still present |
+| Layout | One `table-fixed` table at every width; games fold under the name below `sm`. An auto-sized table let a long name push the rating column out of its card at 360 px |
+| Your place | `#N`, "further down than ranks are counted", "not on this ladder (your profile doesn't show {country})", or "no rating yet" with a link to play |
+| A sparse country | A short page with a cursor is continued up to four times unasked, then "Load more". "Nobody from {country}" is said only once the ladder is exhausted |
+| Peak | Each rating card shows "Highest: N" when `peak` is present — the stored per-class high, never derived |
 
 ## 14. Social — A64-020.4
 

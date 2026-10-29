@@ -16,10 +16,24 @@ reaching for the repository.
 the arrow `domain-model.md` §6 draws — `ADMIN --> "sanctions gate" --> AUTH`
 — and it too can only read. Restricting an account is `ModerationService`'s,
 which is not published and never will be.
+
+`RestrictedAccounts` (A64-033) is the third: the same fact for a page of
+accounts at once, so a public listing can leave a suspended player out
+without one query per row. Membership only — no expiry, no reason.
 """
 
 from app.modules.admin.domain.roles import AdminRole
 from app.modules.admin.public.authority import AdminAuthority
-from app.modules.admin.public.moderation import AccountRestriction, AccountRestrictionGate
+from app.modules.admin.public.moderation import (
+    AccountRestriction,
+    AccountRestrictionGate,
+    RestrictedAccounts,
+)
 
-__all__ = ["AccountRestriction", "AccountRestrictionGate", "AdminAuthority", "AdminRole"]
+__all__ = [
+    "AccountRestriction",
+    "AccountRestrictionGate",
+    "AdminAuthority",
+    "AdminRole",
+    "RestrictedAccounts",
+]

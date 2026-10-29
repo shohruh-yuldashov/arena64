@@ -23,6 +23,7 @@ product decision `specs/admin.md` records; this port is what makes it
 possible without a second call.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -69,4 +70,27 @@ class AccountRestrictionGate(Protocol):
         ...
 
 
-__all__ = ["AccountRestriction", "AccountRestrictionGate"]
+class RestrictedAccounts(Protocol):
+    """Which of a page of accounts are restricted right now — A64-033.
+
+    A second port rather than a method on `AccountRestrictionGate`, so
+    `auth` keeps holding exactly the one question it asks, and a public
+    surface that lists players — the leaderboard — can leave out a
+    suspended account without one query per row.
+
+    **Membership and nothing else.** No expiry, no kind, no reason: a
+    listing needs to know whether to show a row, and anything more would be
+    moderation detail one call away from a public page.
+    """
+
+    async def restricted_among(
+        self, player_ids: Sequence[UUID], *, at: datetime
+    ) -> frozenset[UUID]:
+        """The subset of `player_ids` under a restriction in force at `at`.
+
+        One query however many ids. An empty sequence reads nothing.
+        """
+        ...
+
+
+__all__ = ["AccountRestriction", "AccountRestrictionGate", "RestrictedAccounts"]

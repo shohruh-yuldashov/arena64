@@ -156,8 +156,8 @@ per `around` whatever the span.
 | --- | --- | --- |
 | OQ-1 | ~~Are regional or friends-scoped ladders wanted?~~ **Country ladders shipped in A64-033 (§9).** Friends-scoped ladders remain open (`domain-model.md` Q-18) | Friends-scoped ladders |
 | OQ-2 | Do seasons reset standings? | Seasonal ladders — `specs/rating.md` OQ-3 |
-| OQ-3 | ~~Should a frozen rating appear on the ladder?~~ **Resolved conservatively in A64-033: no** (§9.2). Flagged for product review | — |
-| OQ-4 | Should a suspended account be hidden from public ladders, as A64-033 does (§9.2)? Flagged for product review | — |
+| OQ-3 | ~~Should a frozen rating appear on the ladder?~~ **Decided 2026-10-29: no** — a freeze is PR-5's integrity hold (§9.2) | — |
+| OQ-4 | ~~Should a suspended account be hidden from public ladders?~~ **Decided 2026-10-29: yes** (§9.2) | — |
 
 ---
 
@@ -191,14 +191,16 @@ among the players shown, so they are unique and close up around anybody excluded
 Choosing a country selects a ladder and nothing else: it is a query parameter, never stored, and
 unrelated to the player's own country or the interface language.
 
-### 9.2 Policies decided conservatively, and flagged for review
+### 9.2 Two exclusions, decided by product on 2026-10-29
 
-| Policy | Decision | Why conservative |
+A64-033 implemented both conservatively and flagged them; the product decision confirmed both.
+
+| Policy | Decision | What it rests on |
 | --- | --- | --- |
-| Frozen ratings (OQ-3) | Excluded from every ladder statement — page, own row, rank count, neighbours | A freeze is a fair-play hold. A disputed number taken down later says more than one never shown. Nothing sets the flag yet, so this costs nobody today |
-| Suspended accounts (OQ-4) | Excluded | A public ranking of a suspended player is the platform vouching for them |
+| Suspended accounts (OQ-4) | **Excluded** from public ladders | "Restricted" in `admin.RestrictedAccounts` means an effective sanction, and `SanctionKind` has one member, `SUSPENDED`, so the two are the same set |
+| Frozen ratings (OQ-3) | **Excluded** from every ladder statement — page, own row, rank count, neighbours | The product rule is "exclude when the freeze is an anti-abuse or integrity restriction". `is_frozen` has exactly one meaning, PR-5 (`domain-model.md` §11.1): *"rating a player's wins while investigating whether those wins were assisted defeats the investigation"* — an integrity hold, set only by the future `fairplay` module. So every freeze is that case and nothing was redefined. If a second kind of freeze is ever introduced, this rule must be revisited with it |
 
-Both are reversible in one place each. Neither is invented silently: both are listed in §8.
+Each is enforced in one place: `rating`'s ladder query for frozen ratings, `LeaderboardService._shown` for suspensions.
 
 ### 9.3 Cost, and why there is still no cache
 
